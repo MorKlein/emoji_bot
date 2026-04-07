@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Галерея с GitHub</title>
+
+  <style>
+    :root {
+      --bg: #f5f5f5;
+      --card-bg: #ffffff;
+      --border: #d8d8d8;
+      --text: #1f1f1f;
+      --muted: #666666;
+      --accent: #2c6bed;
+      --accent-hover: #1f57c4;
+      --overlay: rgba(15, 20, 30, 0.55);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .toolbar {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 20px;
+    }
+
+    h1 {
+      text-align: center;
+      margin: 0 0 24px;
+    }
+
+    button,
+    input[type="text"] {
+      font: inherit;
+    }
+
+    button {
+      border: none;
+      border-radius: 8px;
+      padding: 10px 16px;
+      cursor: pointer;
+      transition: background 0.2s ease, transform 0.2s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+    }
+
+    .primary-btn {
+      background: var(--accent);
+      color: #ffffff;
+    }
+
+    .primary-btn:hover {
+      background: var(--accent-hover);
+    }
+
+    .secondary-btn {
+      background: #e8e8e8;
+      color: var(--text);
+    }
+
+    .secondary-btn:hover {
+      background: #dcdcdc;
+    }
+
+    .gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 15px;
+    }
+
+    .gallery-status {
+      grid-column: 1 / -1;
+      text-align: center;
+      color: var(--muted);
+      padding: 24px 12px;
+    }
+
+    .card {
+      background: var(--card-bg);
+      padding: 10px;
+      border-radius: 10px;
+      text-align: center;
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    }
+
+    .card img,
+    .card video {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      border-radius: 5px;
+    }
+
+    .card audio {
+      width: 100%;
+      margin-top: 8px;
+    }
+
+    .card p {
+      margin: 10px 0 0;
+      word-break: break-word;
+    }
+
+    .file-type {
+      margin-top: 6px;
+      font-size: 13px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: var(--overlay);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 1000;
+    }
+
+    .modal-overlay.open {
+      display: flex;
+    }
+
+    .modal {
+      width: min(100%, 440px);
+      background: #ffffff;
+      border-radius: 14px;
+      padding: 20px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+    }
+
+    .modal h2 {
+      margin: 0 0 16px;
+      font-size: 22px;
+    }
+
+    .dropzone {
+      border: 2px dashed var(--border);
+      border-radius: 12px;
+      padding: 28px 20px;
+      text-align: center;
+      color: var(--muted);
+      background: #fafafa;
+      transition: border-color 0.2s ease, background 0.2s ease;
+    }
+
+    .dropzone.dragover {
+      border-color: var(--accent);
+      background: #eef4ff;
+      color: var(--text);
+    }
+
+    .dropzone p {
+      margin: 0 0 12px;
+    }
+
+    .dropzone button {
+      margin-top: 4px;
+    }
+
+    .hidden-input {
+      display: none;
+    }
+
+    .field {
+      margin-top: 16px;
+    }
+
+    .field label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    .field input[type="text"] {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+
+    .selected-file {
+      margin-top: 12px;
+      font-size: 14px;
+      color: var(--muted);
+      min-height: 20px;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="toolbar">
+    <button class="primary-btn" id="openUploadModalBtn">Добавить изображение</button>
+  </div>
+
+  <h1>Галерея изображений</h1>
+
+  <div class="gallery" id="gallery"></div>
+
+  <div class="modal-overlay" id="uploadModal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="uploadModalTitle">
+      <h2 id="uploadModalTitle">Добавить изображение</h2>
+
+      <div class="dropzone" id="dropzone">
+        <p>Перетащите изображение сюда</p>
+        <p>или</p>
+        <button type="button" class="secondary-btn" id="chooseFileBtn">Выбрать из Проводника</button>
+        <input class="hidden-input" type="file" id="fileInput" accept="image/*,video/*,audio/*">
+        <div class="selected-file" id="selectedFileName">Файл пока не выбран</div>
+      </div>
+
+      <div class="field">
+        <label for="imgName">Название файла</label>
+        <input id="imgName" type="text" placeholder="Например, smile.png">
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" class="secondary-btn" id="cancelUploadBtn">Отмена</button>
+        <button type="button" class="primary-btn" id="confirmUploadBtn">Готово</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const TOKEN = "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";
+    const USER = "MorKlein";
+    const REPO = "emoji_bot";
+    const FOLDER = "emoji";
+    const API_BASE = `https://api.github.com/repos/${USER}/${REPO}/contents`;
+
+    const gallery = document.getElementById("gallery");
+    const uploadModal = document.getElementById("uploadModal");
+    const openUploadModalBtn = document.getElementById("openUploadModalBtn");
+    const cancelUploadBtn = document.getElementById("cancelUploadBtn");
+    const confirmUploadBtn = document.getElementById("confirmUploadBtn");
+    const chooseFileBtn = document.getElementById("chooseFileBtn");
+    const fileInput = document.getElementById("fileInput");
+    const dropzone = document.getElementById("dropzone");
+    const imgNameInput = document.getElementById("imgName");
+    const selectedFileName = document.getElementById("selectedFileName");
+
+    let selectedFile = null;
+
+    const mediaExtensions = {
+      image: [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".avif"],
+      video: [".mp4", ".webm", ".ogv", ".mov"],
+      audio: [".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"]
+    };
+
+    const apiJsonHeaders = {
+      "Authorization": `token ${TOKEN}`,
+      "Accept": "application/vnd.github+json"
+    };
+
+    const apiRawHeaders = {
+      "Authorization": `token ${TOKEN}`,
+      "Accept": "application/vnd.github.raw"
+    };
+
+    loadMediaFiles();
+
+    function setGalleryStatus(message) {
+      gallery.innerHTML = `<div class="gallery-status">${message}</div>`;
+    }
+
+    async function loadMediaFiles() {
+      setGalleryStatus("Загрузка медиафайлов...");
+
+      try {
+        const response = await fetch(`${API_BASE}/${FOLDER}`, {
+          headers: apiJsonHeaders
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          if (response.status === 404) {
+            setGalleryStatus(`Папка "${FOLDER}" не найдена или пока пуста.`);
+            return;
+          }
+
+          throw new Error(data.message || `HTTP ${response.status}`);
+        }
+
+        if (!Array.isArray(data)) {
+          throw new Error("GitHub вернул неожиданный формат данных");
+        }
+
+        const mediaFiles = data
+          .filter(file => file.type === "file")
+          .map(file => ({
+            ...file,
+            mediaType: getMediaType(file.name)
+          }))
+          .filter(file => file.mediaType);
+
+        if (mediaFiles.length === 0) {
+          setGalleryStatus("В папке пока нет поддерживаемых медиафайлов.");
+          return;
+        }
+
+        gallery.innerHTML = "";
+
+        for (const file of mediaFiles) {
+          try {
+            const mediaUrl = await getMediaFileUrl(file.path);
+            createCard(mediaUrl, file.name, file.mediaType);
+          } catch (error) {
+            console.log(`Не удалось загрузить файл ${file.name}:`, error);
+          }
+        }
+
+        if (!gallery.children.length) {
+          setGalleryStatus("Не удалось загрузить медиафайлы из репозитория.");
+        }
+      } catch (error) {
+        console.log("Ошибка:", error);
+        setGalleryStatus(`Ошибка загрузки: ${error.message}`);
+      }
+    }
+
+    async function getMediaFileUrl(path) {
+      const response = await fetch(`${API_BASE}/${path}`, {
+        headers: apiRawHeaders
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const blob = await response.blob();
+      return URL.createObjectURL(blob);
+    }
+
+    function getMediaType(name) {
+      const lowerName = name.toLowerCase();
+
+      if (mediaExtensions.image.some(ext => lowerName.endsWith(ext))) {
+        return "image";
+      }
+
+      if (mediaExtensions.video.some(ext => lowerName.endsWith(ext))) {
+        return "video";
+      }
+
+      if (mediaExtensions.audio.some(ext => lowerName.endsWith(ext))) {
+        return "audio";
+      }
+
+      return null;
+    }
+
+    function isSupportedMediaFile(file) {
+      if (file.type.startsWith("image/") || file.type.startsWith("video/") || file.type.startsWith("audio/")) {
+        return true;
+      }
+
+      return Boolean(getMediaType(file.name));
+    }
+
+    function createCard(url, name, mediaType) {
+      const card = document.createElement("div");
+      card.className = "card";
+
+      let mediaElement;
+
+      if (mediaType === "image") {
+        mediaElement = document.createElement("img");
+        mediaElement.src = url;
+        mediaElement.alt = name;
+      } else if (mediaType === "video") {
+        mediaElement = document.createElement("video");
+        mediaElement.src = url;
+        mediaElement.controls = true;
+        mediaElement.preload = "metadata";
+      } else if (mediaType === "audio") {
+        mediaElement = document.createElement("audio");
+        mediaElement.src = url;
+        mediaElement.controls = true;
+        mediaElement.preload = "metadata";
+      }
+
+      const title = document.createElement("p");
+      title.textContent = name;
+
+      const type = document.createElement("div");
+      type.className = "file-type";
+      type.textContent = mediaType;
+
+      card.appendChild(mediaElement);
+      card.appendChild(title);
+      card.appendChild(type);
+      gallery.appendChild(card);
+    }
+
+    function openUploadModal() {
+      uploadModal.classList.add("open");
+    }
+
+    function closeUploadModal() {
+      uploadModal.classList.remove("open");
+      fileInput.value = "";
+      selectedFile = null;
+      imgNameInput.value = "";
+      selectedFileName.textContent = "Файл пока не выбран";
+      dropzone.classList.remove("dragover");
+    }
+
+    function setSelectedFile(file) {
+      if (!file) {
+        return;
+      }
+
+      if (!isSupportedMediaFile(file)) {
+        alert("Можно выбрать только медиафайл");
+        return;
+      }
+
+      selectedFile = file;
+      imgNameInput.value = file.name;
+      selectedFileName.textContent = `Выбран файл: ${file.name}`;
+    }
+
+    openUploadModalBtn.addEventListener("click", openUploadModal);
+    cancelUploadBtn.addEventListener("click", closeUploadModal);
+    confirmUploadBtn.addEventListener("click", uploadToGitHub);
+    chooseFileBtn.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", event => {
+      setSelectedFile(event.target.files[0]);
+    });
+
+    uploadModal.addEventListener("click", event => {
+      if (event.target === uploadModal) {
+        closeUploadModal();
+      }
+    });
+
+    ["dragenter", "dragover"].forEach(eventName => {
+      dropzone.addEventListener(eventName, event => {
+        event.preventDefault();
+        dropzone.classList.add("dragover");
+      });
+    });
+
+    ["dragleave", "drop"].forEach(eventName => {
+      dropzone.addEventListener(eventName, event => {
+        event.preventDefault();
+        dropzone.classList.remove("dragover");
+      });
+    });
+
+    dropzone.addEventListener("drop", event => {
+      const file = event.dataTransfer.files[0];
+      setSelectedFile(file);
+    });
+
+    async function uploadToGitHub() {
+      const name = imgNameInput.value.trim();
+
+      if (!selectedFile || !name) {
+        alert("Выберите изображение и укажите название файла");
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.readAsDataURL(selectedFile);
+
+      reader.onloadend = async function () {
+        const base64 = reader.result.split(",")[1];
+        const path = `${FOLDER}/${name}`;
+
+        try {
+          const upload = await fetch(
+            `https://api.github.com/repos/${USER}/${REPO}/contents/${path}`,
+            {
+              method: "PUT",
+              headers: {
+                "Authorization": `token ${TOKEN}`,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                message: "Добавлено изображение",
+                content: base64
+              })
+            }
+          );
+
+          if (upload.ok) {
+            alert("Загружено в GitHub!");
+            closeUploadModal();
+            location.reload();
+          } else {
+            alert("Ошибка загрузки");
+          }
+        } catch (error) {
+          console.log("Ошибка загрузки:", error);
+          alert("Не удалось загрузить изображение");
+        }
+      };
+    }
+  </script>
+
+</body>
+</html>
