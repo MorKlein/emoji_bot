@@ -18,8 +18,6 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "bot.db"
 EMOJI_DIR = BASE_DIR / "emoji"
-SUPPORTED_EXTENSIONS = {".gif", ".webp"}
-
 EMOJI_DIR.mkdir(exist_ok=True)
 
 
@@ -57,8 +55,6 @@ def scan_emoji_files() -> dict[str, Path]:
     emoji_map: dict[str, Path] = {}
     for file in EMOJI_DIR.iterdir():
         if not file.is_file():
-            continue
-        if file.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
         emoji_map[file.stem.lower()] = file
     return emoji_map
