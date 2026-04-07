@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "bot.db"
 EMOJI_DIR = BASE_DIR / "emoji"
+
 EMOJI_DIR.mkdir(exist_ok=True)
 
 
@@ -81,7 +82,7 @@ def sync_emoji_db() -> dict[str, Path]:
                 """,
                 (name, relative_path),
             )
-            logger.info("Добавил %s в базу", name)
+            logger.info("Р”РѕР±Р°РІРёР» %s РІ Р±Р°Р·Сѓ", name)
             continue
 
         if row["file_path"] != relative_path:
@@ -93,11 +94,11 @@ def sync_emoji_db() -> dict[str, Path]:
                 """,
                 (relative_path, name),
             )
-            logger.info("Обновил путь для %s", name)
+            logger.info("РћР±РЅРѕРІРёР» РїСѓС‚СЊ РґР»СЏ %s", name)
 
     for name in db_names - disk_names:
         cursor.execute("DELETE FROM emoji WHERE name = ?", (name,))
-        logger.info("Удалил %s из базы, потому что файла больше нет", name)
+        logger.info("РЈРґР°Р»РёР» %s РёР· Р±Р°Р·С‹, РїРѕС‚РѕРјСѓ С‡С‚Рѕ С„Р°Р№Р»Р° Р±РѕР»СЊС€Рµ РЅРµС‚", name)
 
     conn.commit()
     return emoji_map
@@ -132,7 +133,7 @@ def find_matching_names(text: str, available_names: list[str]) -> list[str]:
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
-    raise RuntimeError("BOT_TOKEN не найден. Укажите его в переменной окружения.")
+    raise RuntimeError("BOT_TOKEN РЅРµ РЅР°Р№РґРµРЅ. РЈРєР°Р¶РёС‚Рµ РµРіРѕ РІ РїРµСЂРµРјРµРЅРЅРѕР№ РѕРєСЂСѓР¶РµРЅРёСЏ.")
 
 
 bot = Bot(
@@ -148,10 +149,10 @@ async def help_command(message: Message):
     emoji_map = sync_emoji_db()
     names = sorted(emoji_map)
     if not names:
-        await message.answer("В папке emoji пока нет файлов.")
+        await message.answer("Р’ РїР°РїРєРµ emoji РїРѕРєР° РЅРµС‚ С„Р°Р№Р»РѕРІ.")
         return
 
-    await message.answer("Список эмодзи:\n" + ", ".join(names))
+    await message.answer("РЎРїРёСЃРѕРє СЌРјРѕРґР·Рё:\n" + ", ".join(names))
 
 
 @router.message(F.text)
@@ -170,19 +171,19 @@ async def handle_text(message: Message):
 
         file_path = from_relative_project_path(record["file_path"])
         if not file_path.exists():
-            logger.warning("Файл %s пропал с диска, синхронизирую базу", file_path)
+            logger.warning("Р¤Р°Р№Р» %s РїСЂРѕРїР°Р» СЃ РґРёСЃРєР°, СЃРёРЅС…СЂРѕРЅРёР·РёСЂСѓСЋ Р±Р°Р·Сѓ", file_path)
             sync_emoji_db()
             continue
 
         if record["telegram_file_id"]:
-            logger.info("Отправляю %s по cached file_id", name)
+            logger.info("РћС‚РїСЂР°РІР»СЏСЋ %s РїРѕ cached file_id", name)
             if file_path.suffix.lower() == ".gif":
                 await message.answer_animation(record["telegram_file_id"])
             else:
                 await message.answer_sticker(record["telegram_file_id"])
             continue
 
-        logger.info("Отправляю %s из файла %s", name, file_path)
+        logger.info("РћС‚РїСЂР°РІР»СЏСЋ %s РёР· С„Р°Р№Р»Р° %s", name, file_path)
         if file_path.suffix.lower() == ".gif":
             sent_message = await message.answer_animation(FSInputFile(str(file_path)))
             telegram_file_id = sent_message.animation.file_id
@@ -197,7 +198,7 @@ async def handle_text(message: Message):
 
 async def main():
     sync_emoji_db()
-    logger.info("Запуск бота...")
+    logger.info("Р—Р°РїСѓСЃРє Р±РѕС‚Р°...")
     logger.info("BOT_TOKEN: %s...", TOKEN[:5])
     dp.include_router(router)
     await dp.start_polling(bot)
@@ -207,6 +208,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Программа завершена!")
+        print("РџСЂРѕРіСЂР°РјРјР° Р·Р°РІРµСЂС€РµРЅР°!")
     finally:
         conn.close()
+
