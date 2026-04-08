@@ -1,11 +1,15 @@
 import asyncio
 import hashlib
+import json
 import logging
 import os
-import sqlite3
 import shutil
+import sqlite3
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -28,6 +32,10 @@ BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "bot.db"
 EMOJI_DIR = BASE_DIR / "emoji"
 CONVERTED_DIR = BASE_DIR / "converted_emoji"
+GITHUB_REPO = os.getenv("GITHUB_REPO", "").strip()
+GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip() or "main"
+GITHUB_EMOJI_DIR = os.getenv("GITHUB_EMOJI_DIR", "emoji").strip().strip("/") or "emoji"
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 
 STICKER_EXTENSIONS = {".webp", ".tgs", ".webm"}
 ANIMATION_EXTENSIONS = {".gif"}
@@ -41,6 +49,16 @@ CONVERTED_DIR.mkdir(exist_ok=True)
 class PreparedMedia:
     file_path: Path
     media_type: str
+
+
+@dataclass
+class GitHubSyncResult:
+    success: bool
+    attempted: bool
+    remote_files: int
+    written_files: int
+    removed_files: int
+    message: str
 
 
 def get_connection() -> sqlite3.Connection:
@@ -188,6 +206,150 @@ def scan_emoji_files() -> dict[str, Path]:
             continue
         emoji_map[file.stem.lower()] = file
     return emoji_map
+
+
+def github_headers() -> dict[str, str]:
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "7tv-emoji-bot",
+    }
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    return headers
+
+
+def github_get_json(url: str):
+    request = Request(url, headers=github_headers())
+    with urlopen(request, timeout=30) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def github_get_bytes(url: str) -> bytes:
+    request = Request(url, headers=github_headers())
+    with urlopen(request, timeout=30) as response:
+        return response.read()
+
+
+def list_github_emoji_files() -> tuple[str, list[PurePosixPath]]:
+    branch_url = (
+        f"https://api.github.com/repos/{GITHUB_REPO}"
+        f"/branches/{quote(GITHUB_BRANCH, safe='')}"
+    )
+    branch_data = github_get_json(branch_url)
+    commit_sha = branch_data["commit"]["sha"]
+
+    tree_url = f"https://api.github.com/repos/{GITHUB_REPO}/git/trees/{commit_sha}?recursive=1"
+    tree_data = github_get_json(tree_url)
+
+    emoji_root = PurePosixPath(GITHUB_EMOJI_DIR)
+    files: list[PurePosixPath] = []
+    for item in tree_data.get("tree", []):
+        if item.get("type") != "blob":
+            continue
+
+        item_path = PurePosixPath(item["path"])
+        try:
+            relative_path = item_path.relative_to(emoji_root)
+        except ValueError:
+            continue
+
+        if not relative_path.parts:
+            continue
+        if any(part in {"", ".."} for part in relative_path.parts):
+            continue
+
+        files.append(relative_path)
+
+    return commit_sha, files
+
+
+def sync_emoji_dir_with_github() -> GitHubSyncResult:
+    if not GITHUB_REPO:
+        return GitHubSyncResult(
+            success=False,
+            attempted=False,
+            remote_files=0,
+            written_files=0,
+            removed_files=0,
+            message="GitHub sync skipped: set GITHUB_REPO to owner/repo.",
+        )
+
+    try:
+        commit_sha, remote_files = list_github_emoji_files()
+    except HTTPError as error:
+        details = error.read().decode("utf-8", errors="replace").strip()
+        return GitHubSyncResult(
+            success=False,
+            attempted=True,
+            remote_files=0,
+            written_files=0,
+            removed_files=0,
+            message=f"GitHub sync failed: HTTP {error.code}. {details}",
+        )
+    except URLError as error:
+        return GitHubSyncResult(
+            success=False,
+            attempted=True,
+            remote_files=0,
+            written_files=0,
+            removed_files=0,
+            message=f"GitHub sync failed: {error.reason}",
+        )
+    except KeyError as error:
+        return GitHubSyncResult(
+            success=False,
+            attempted=True,
+            remote_files=0,
+            written_files=0,
+            removed_files=0,
+            message=f"GitHub sync failed: unexpected API response ({error}).",
+        )
+
+    remote_set = {path.as_posix() for path in remote_files}
+
+    removed_files = 0
+    if EMOJI_DIR.exists():
+        for local_path in sorted(EMOJI_DIR.rglob("*"), reverse=True):
+            if local_path.is_file():
+                relative_path = local_path.relative_to(EMOJI_DIR).as_posix()
+                if relative_path not in remote_set:
+                    local_path.unlink()
+                    removed_files += 1
+            elif local_path.is_dir() and not any(local_path.iterdir()):
+                local_path.rmdir()
+
+    written_files = 0
+    for relative_path in remote_files:
+        local_path = EMOJI_DIR.joinpath(*relative_path.parts)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+
+        remote_path = (PurePosixPath(GITHUB_EMOJI_DIR) / relative_path).as_posix()
+        raw_url = (
+            f"https://raw.githubusercontent.com/{GITHUB_REPO}/{commit_sha}/"
+            f"{quote(remote_path, safe='/')}"
+        )
+        remote_bytes = github_get_bytes(raw_url)
+        current_bytes = local_path.read_bytes() if local_path.exists() else None
+        if current_bytes != remote_bytes:
+            local_path.write_bytes(remote_bytes)
+            written_files += 1
+
+    logger.info(
+        "Synced emoji folder with GitHub: repo=%s branch=%s remote=%s written=%s removed=%s",
+        GITHUB_REPO,
+        GITHUB_BRANCH,
+        len(remote_files),
+        written_files,
+        removed_files,
+    )
+    return GitHubSyncResult(
+        success=True,
+        attempted=True,
+        remote_files=len(remote_files),
+        written_files=written_files,
+        removed_files=removed_files,
+        message=f"GitHub sync completed from {GITHUB_REPO}@{GITHUB_BRANCH}.",
+    )
 
 
 def clear_emoji_state() -> dict[str, int]:
@@ -341,19 +503,27 @@ async def help_command(message: Message):
 
     if names:
         lines.append("")
-        lines.append("Доступные стикеры:")
+        lines.append("Available emoji:")
         lines.append(", ".join(names))
+    else:
+        lines.append("")
+        lines.append("The emoji folder is currently empty.")
 
     await message.answer("\n".join(lines))
 
 
 @router.message(Command("update"))
 async def update_command(message: Message):
+    github_sync = sync_emoji_dir_with_github()
     emoji_map, stats = sync_emoji_db(reset_file_ids=True)
     names = sorted(emoji_map)
 
     lines = [
         "Emoji list updated.",
+        github_sync.message,
+        f"GitHub remote files: {github_sync.remote_files}",
+        f"GitHub files written locally: {github_sync.written_files}",
+        f"Local files removed: {github_sync.removed_files}",
         f"Total available: {len(names)}",
         f"Added: {stats['added']}",
         f"Paths updated: {stats['updated']}",
@@ -374,12 +544,17 @@ async def update_command(message: Message):
 
 @router.message(Command("clear"))
 async def clear_command(message: Message):
+    github_sync = sync_emoji_dir_with_github()
     clear_stats = clear_emoji_state()
     emoji_map, sync_stats = sync_emoji_db(reset_file_ids=True)
     names = sorted(emoji_map)
 
     lines = [
         "Database fully rebuilt.",
+        github_sync.message,
+        f"GitHub remote files: {github_sync.remote_files}",
+        f"GitHub files written locally: {github_sync.written_files}",
+        f"Local files removed: {github_sync.removed_files}",
         f"Rows removed from DB: {clear_stats['db_rows_removed']}",
         f"Converted files removed: {clear_stats['converted_removed']}",
         f"Inserted from emoji folder: {sync_stats['added']}",
