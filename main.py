@@ -94,7 +94,15 @@ def build_converted_path(source_path: Path, suffix: str) -> Path:
 
 def fit_image_to_sticker(image: Image.Image) -> Image.Image:
     prepared = image.convert("RGBA")
-    prepared.thumbnail((512, 512), RESAMPLING.LANCZOS)
+    if prepared.width == 0 or prepared.height == 0:
+        raise RuntimeError("Image has invalid dimensions for sticker conversion")
+
+    scale = min(512 / prepared.width, 512 / prepared.height)
+    resized_size = (
+        max(1, round(prepared.width * scale)),
+        max(1, round(prepared.height * scale)),
+    )
+    prepared = prepared.resize(resized_size, RESAMPLING.LANCZOS)
 
     canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
     offset = (
