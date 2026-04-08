@@ -503,73 +503,20 @@ async def help_command(message: Message):
 
     if names:
         lines.append("")
-        lines.append("Available emoji:")
+        lines.append("Доступные стикеры:")
         lines.append(", ".join(names))
-    else:
-        lines.append("")
-        lines.append("The emoji folder is currently empty.")
 
     await message.answer("\n".join(lines))
+
 
 
 @router.message(Command("update"))
-async def update_command(message: Message):
-    github_sync = sync_emoji_dir_with_github()
-    emoji_map, stats = sync_emoji_db(reset_file_ids=True)
-    names = sorted(emoji_map)
-
-    lines = [
-        "Emoji list updated.",
-        github_sync.message,
-        f"GitHub remote files: {github_sync.remote_files}",
-        f"GitHub files written locally: {github_sync.written_files}",
-        f"Local files removed: {github_sync.removed_files}",
-        f"Total available: {len(names)}",
-        f"Added: {stats['added']}",
-        f"Paths updated: {stats['updated']}",
-        f"Removed: {stats['removed']}",
-        f"file_id reset: {stats['file_ids_reset']}",
-    ]
-
-    if names:
-        lines.append("")
-        lines.append("Available emoji:")
-        lines.append(", ".join(names))
-    else:
-        lines.append("")
-        lines.append("The emoji folder is currently empty.")
-
-    await message.answer("\n".join(lines))
-
-
-@router.message(Command("clear"))
 async def clear_command(message: Message):
     github_sync = sync_emoji_dir_with_github()
     clear_stats = clear_emoji_state()
     emoji_map, sync_stats = sync_emoji_db(reset_file_ids=True)
-    names = sorted(emoji_map)
 
-    lines = [
-        "Database fully rebuilt.",
-        github_sync.message,
-        f"GitHub remote files: {github_sync.remote_files}",
-        f"GitHub files written locally: {github_sync.written_files}",
-        f"Local files removed: {github_sync.removed_files}",
-        f"Rows removed from DB: {clear_stats['db_rows_removed']}",
-        f"Converted files removed: {clear_stats['converted_removed']}",
-        f"Inserted from emoji folder: {sync_stats['added']}",
-        f"Total available: {len(names)}",
-    ]
-
-    if names:
-        lines.append("")
-        lines.append("Available emoji:")
-        lines.append(", ".join(names))
-    else:
-        lines.append("")
-        lines.append("The emoji folder is currently empty.")
-
-    await message.answer("\n".join(lines))
+    await message.answer("База данных обновлена!")
 
 
 @router.message(F.text)
