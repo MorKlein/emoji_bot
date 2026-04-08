@@ -61,16 +61,22 @@ def scan_emoji_files() -> dict[str, Path]:
     return emoji_map
 
 
-def sync_emoji_db() -> dict[str, Path]:
+def sync_emoji_db(reset_file_ids: bool = False) -> tuple[dict[str, Path], dict[str, int]]:
     emoji_map = scan_emoji_files()
     db_rows = cursor.execute("SELECT name, file_path FROM emoji").fetchall()
     db_names = {row["name"] for row in db_rows}
     disk_names = set(emoji_map)
+    stats = {
+        "added": 0,
+        "updated": 0,
+        "removed": 0,
+        "file_ids_reset": 0,
+    }
 
     for name, file_path in emoji_map.items():
         relative_path = to_relative_project_path(file_path)
         row = cursor.execute(
-            "SELECT file_path FROM emoji WHERE name = ?",
+            "SELECT file_path, telegram_file_id FROM emoji WHERE name = ?",
             (name,),
         ).fetchone()
 
@@ -82,26 +88,36 @@ def sync_emoji_db() -> dict[str, Path]:
                 """,
                 (name, relative_path),
             )
-            logger.info("Р”РѕР±Р°РІРёР» %s РІ Р±Р°Р·Сѓ", name)
+            stats["added"] += 1
+            logger.info("Добавил %s в базу", name)
             continue
 
-        if row["file_path"] != relative_path:
+        path_changed = row["file_path"] != relative_path
+        should_reset_file_id = reset_file_ids and row["telegram_file_id"] is not None
+
+        if path_changed or should_reset_file_id:
             cursor.execute(
                 """
                 UPDATE emoji
-                SET file_path = ?, telegram_file_id = NULL, updated_at = CURRENT_TIMESTAMP
+                SET file_path = ?, telegram_file_id = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE name = ?
                 """,
-                (relative_path, name),
+                (relative_path, None if path_changed or reset_file_ids else row["telegram_file_id"], name),
             )
-            logger.info("РћР±РЅРѕРІРёР» РїСѓС‚СЊ РґР»СЏ %s", name)
+            if path_changed:
+                stats["updated"] += 1
+                logger.info("Обновил путь для %s", name)
+            if should_reset_file_id:
+                stats["file_ids_reset"] += 1
+                logger.info("Сбросил Telegram file_id для %s", name)
 
     for name in db_names - disk_names:
         cursor.execute("DELETE FROM emoji WHERE name = ?", (name,))
-        logger.info("РЈРґР°Р»РёР» %s РёР· Р±Р°Р·С‹, РїРѕС‚РѕРјСѓ С‡С‚Рѕ С„Р°Р№Р»Р° Р±РѕР»СЊС€Рµ РЅРµС‚", name)
+        stats["removed"] += 1
+        logger.info("Удалил %s из базы, потому что файла больше нет", name)
 
     conn.commit()
-    return emoji_map
+    return emoji_map, stats
 
 
 def get_emoji_record(name: str):
@@ -133,7 +149,7 @@ def find_matching_names(text: str, available_names: list[str]) -> list[str]:
 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
-    raise RuntimeError("BOT_TOKEN РЅРµ РЅР°Р№РґРµРЅ. РЈРєР°Р¶РёС‚Рµ РµРіРѕ РІ РїРµСЂРµРјРµРЅРЅРѕР№ РѕРєСЂСѓР¶РµРЅРёСЏ.")
+    raise RuntimeError("BOT_TOKEN не найден. Укажите его в переменной окружения.")
 
 
 bot = Bot(
@@ -146,18 +162,37 @@ router = Router()
 
 @router.message(Command("help"))
 async def help_command(message: Message):
-    emoji_map = sync_emoji_db()
-    names = sorted(emoji_map)
-    if not names:
-        await message.answer("Р’ РїР°РїРєРµ emoji РїРѕРєР° РЅРµС‚ С„Р°Р№Р»РѕРІ.")
-        return
+    await message.answer("https://011b0034.7tv-emoji-site.pages.dev/")
 
-    await message.answer("РЎРїРёСЃРѕРє СЌРјРѕРґР·Рё:\n" + ", ".join(names))
+
+@router.message(Command("update"))
+async def update_command(message: Message):
+    emoji_map, stats = sync_emoji_db(reset_file_ids=True)
+    names = sorted(emoji_map)
+
+    lines = [
+        "Список эмодзи обновлён.",
+        f"Всего доступно: {len(names)}",
+        f"Добавлено: {stats['added']}",
+        f"Обновлено путей: {stats['updated']}",
+        f"Удалено: {stats['removed']}",
+        f"Сброшено file_id: {stats['file_ids_reset']}",
+    ]
+
+    if names:
+        lines.append("")
+        lines.append("Доступные эмодзи:")
+        lines.append(", ".join(names))
+    else:
+        lines.append("")
+        lines.append("Сейчас папка emoji пустая.")
+
+    await message.answer("\n".join(lines))
 
 
 @router.message(F.text)
 async def handle_text(message: Message):
-    emoji_map = sync_emoji_db()
+    emoji_map, _ = sync_emoji_db()
     text = message.text.lower()
     matching_names = find_matching_names(text, list(emoji_map))
 
@@ -171,19 +206,19 @@ async def handle_text(message: Message):
 
         file_path = from_relative_project_path(record["file_path"])
         if not file_path.exists():
-            logger.warning("Р¤Р°Р№Р» %s РїСЂРѕРїР°Р» СЃ РґРёСЃРєР°, СЃРёРЅС…СЂРѕРЅРёР·РёСЂСѓСЋ Р±Р°Р·Сѓ", file_path)
+            logger.warning("Файл %s пропал с диска, синхронизирую базу", file_path)
             sync_emoji_db()
             continue
 
         if record["telegram_file_id"]:
-            logger.info("РћС‚РїСЂР°РІР»СЏСЋ %s РїРѕ cached file_id", name)
+            logger.info("Отправляю %s по cached file_id", name)
             if file_path.suffix.lower() == ".gif":
                 await message.answer_animation(record["telegram_file_id"])
             else:
                 await message.answer_sticker(record["telegram_file_id"])
             continue
 
-        logger.info("РћС‚РїСЂР°РІР»СЏСЋ %s РёР· С„Р°Р№Р»Р° %s", name, file_path)
+        logger.info("Отправляю %s из файла %s", name, file_path)
         if file_path.suffix.lower() == ".gif":
             sent_message = await message.answer_animation(FSInputFile(str(file_path)))
             telegram_file_id = sent_message.animation.file_id
@@ -198,7 +233,7 @@ async def handle_text(message: Message):
 
 async def main():
     sync_emoji_db()
-    logger.info("Р—Р°РїСѓСЃРє Р±РѕС‚Р°...")
+    logger.info("Запуск бота...")
     logger.info("BOT_TOKEN: %s...", TOKEN[:5])
     dp.include_router(router)
     await dp.start_polling(bot)
@@ -208,7 +243,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("РџСЂРѕРіСЂР°РјРјР° Р·Р°РІРµСЂС€РµРЅР°!")
+        print("Программа завершена!")
     finally:
         conn.close()
-
