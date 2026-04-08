@@ -3,6 +3,7 @@ import hashlib
 import logging
 import os
 import sqlite3
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -181,6 +182,28 @@ def scan_emoji_files() -> dict[str, Path]:
     return emoji_map
 
 
+def clear_emoji_state() -> dict[str, int]:
+    row_count = cursor.execute("SELECT COUNT(*) AS count FROM emoji").fetchone()["count"]
+
+    cursor.execute("DELETE FROM emoji")
+    conn.commit()
+
+    converted_removed = 0
+    if CONVERTED_DIR.exists():
+        for entry in CONVERTED_DIR.iterdir():
+            if entry.is_dir():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+            converted_removed += 1
+
+    logger.info("Cleared emoji database and removed %s converted files", converted_removed)
+    return {
+        "db_rows_removed": row_count,
+        "converted_removed": converted_removed,
+    }
+
+
 def sync_emoji_db(reset_file_ids: bool = False) -> tuple[dict[str, Path], dict[str, int]]:
     emoji_map = scan_emoji_files()
     db_rows = cursor.execute("SELECT name, file_path FROM emoji").fetchall()
@@ -301,7 +324,9 @@ router = Router()
 
 @router.message(Command("help"))
 async def help_command(message: Message):
-    await message.answer("https://011b0034.7tv-emoji-site.pages.dev/")
+    await message.answer(
+        "https://011b0034.7tv-emoji-site.pages.dev/"
+    )
 
 
 @router.message(Command("update"))
@@ -316,6 +341,31 @@ async def update_command(message: Message):
         f"Paths updated: {stats['updated']}",
         f"Removed: {stats['removed']}",
         f"file_id reset: {stats['file_ids_reset']}",
+    ]
+
+    if names:
+        lines.append("")
+        lines.append("Available emoji:")
+        lines.append(", ".join(names))
+    else:
+        lines.append("")
+        lines.append("The emoji folder is currently empty.")
+
+    await message.answer("\n".join(lines))
+
+
+@router.message(Command("clear"))
+async def clear_command(message: Message):
+    clear_stats = clear_emoji_state()
+    emoji_map, sync_stats = sync_emoji_db(reset_file_ids=True)
+    names = sorted(emoji_map)
+
+    lines = [
+        "Database fully rebuilt.",
+        f"Rows removed from DB: {clear_stats['db_rows_removed']}",
+        f"Converted files removed: {clear_stats['converted_removed']}",
+        f"Inserted from emoji folder: {sync_stats['added']}",
+        f"Total available: {len(names)}",
     ]
 
     if names:
