@@ -4,6 +4,7 @@ import logging
 import os
 import sqlite3
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,6 +42,15 @@ CONVERTED_DIR.mkdir(exist_ok=True)
 class PreparedMedia:
     file_path: Path
     media_type: str
+
+
+@dataclass
+class GitSyncResult:
+    available: bool
+    tracked_files: int
+    restored_files: int
+    removed_files: int
+    message: str
 
 
 def get_connection() -> sqlite3.Connection:
@@ -188,6 +198,103 @@ def scan_emoji_files() -> dict[str, Path]:
             continue
         emoji_map[file.stem.lower()] = file
     return emoji_map
+
+
+def get_git_repo_root() -> Path | None:
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=BASE_DIR,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+
+    return Path(result.stdout.strip())
+
+
+def sync_emoji_dir_with_git() -> GitSyncResult:
+    repo_root = get_git_repo_root()
+    if repo_root is None:
+        return GitSyncResult(
+            available=False,
+            tracked_files=0,
+            restored_files=0,
+            removed_files=0,
+            message="Git sync skipped: current folder is not a git repository.",
+        )
+
+    try:
+        emoji_relative_dir = EMOJI_DIR.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError:
+        return GitSyncResult(
+            available=False,
+            tracked_files=0,
+            restored_files=0,
+            removed_files=0,
+            message="Git sync skipped: emoji folder is outside the git repository.",
+        )
+
+    list_result = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", "HEAD", "--", emoji_relative_dir],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if list_result.returncode != 0:
+        raise RuntimeError(list_result.stderr.strip() or "Failed to read emoji files from git HEAD")
+
+    tracked_relative_paths = [
+        Path(line.strip())
+        for line in list_result.stdout.splitlines()
+        if line.strip()
+    ]
+    tracked_local_paths = {repo_root / path for path in tracked_relative_paths}
+
+    removed_files = 0
+    if EMOJI_DIR.exists():
+        for file_path in sorted(EMOJI_DIR.rglob("*"), reverse=True):
+            if file_path.is_file() and file_path not in tracked_local_paths:
+                file_path.unlink()
+                removed_files += 1
+            elif file_path.is_dir() and not any(file_path.iterdir()):
+                file_path.rmdir()
+
+    restored_files = 0
+    for relative_path in tracked_relative_paths:
+        local_path = repo_root / relative_path
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+
+        file_result = subprocess.run(
+            ["git", "show", f"HEAD:{relative_path.as_posix()}"],
+            cwd=repo_root,
+            capture_output=True,
+        )
+        if file_result.returncode != 0:
+            raise RuntimeError(
+                file_result.stderr.decode("utf-8", errors="replace").strip()
+                or f"Failed to restore {relative_path.as_posix()} from git HEAD"
+            )
+
+        git_bytes = file_result.stdout
+        current_bytes = local_path.read_bytes() if local_path.exists() else None
+        if current_bytes != git_bytes:
+            local_path.write_bytes(git_bytes)
+            restored_files += 1
+
+    logger.info(
+        "Synced emoji folder with git HEAD: tracked=%s restored=%s removed=%s",
+        len(tracked_relative_paths),
+        restored_files,
+        removed_files,
+    )
+    return GitSyncResult(
+        available=True,
+        tracked_files=len(tracked_relative_paths),
+        restored_files=restored_files,
+        removed_files=removed_files,
+        message="Emoji folder synced with git HEAD.",
+    )
 
 
 def clear_emoji_state() -> dict[str, int]:
@@ -349,11 +456,16 @@ async def help_command(message: Message):
 
 @router.message(Command("update"))
 async def update_command(message: Message):
+    git_sync = sync_emoji_dir_with_git()
     emoji_map, stats = sync_emoji_db(reset_file_ids=True)
     names = sorted(emoji_map)
 
     lines = [
         "Emoji list updated.",
+        git_sync.message,
+        f"Git tracked files: {git_sync.tracked_files}",
+        f"Git restored files: {git_sync.restored_files}",
+        f"Git removed local files: {git_sync.removed_files}",
         f"Total available: {len(names)}",
         f"Added: {stats['added']}",
         f"Paths updated: {stats['updated']}",
@@ -374,12 +486,17 @@ async def update_command(message: Message):
 
 @router.message(Command("clear"))
 async def clear_command(message: Message):
+    git_sync = sync_emoji_dir_with_git()
     clear_stats = clear_emoji_state()
     emoji_map, sync_stats = sync_emoji_db(reset_file_ids=True)
     names = sorted(emoji_map)
 
     lines = [
         "Database fully rebuilt.",
+        git_sync.message,
+        f"Git tracked files: {git_sync.tracked_files}",
+        f"Git restored files: {git_sync.restored_files}",
+        f"Git removed local files: {git_sync.removed_files}",
         f"Rows removed from DB: {clear_stats['db_rows_removed']}",
         f"Converted files removed: {clear_stats['converted_removed']}",
         f"Inserted from emoji folder: {sync_stats['added']}",
