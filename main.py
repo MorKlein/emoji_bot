@@ -332,9 +332,19 @@ router = Router()
 
 @router.message(Command("help"))
 async def help_command(message: Message):
-    await message.answer(
-        "https://011b0034.7tv-emoji-site.pages.dev/"
-    )
+    emoji_map, _ = sync_emoji_db()
+    names = sorted(emoji_map)
+
+    lines = [
+        "https://011b0034.7tv-emoji-site.pages.dev/",
+    ]
+
+    if names:
+        lines.append("")
+        lines.append("Доступные стикеры:")
+        lines.append(", ".join(names))
+
+    await message.answer("\n".join(lines))
 
 
 @router.message(Command("update"))
